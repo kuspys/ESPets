@@ -1,3 +1,4 @@
+#include "HardwareSerial.h"
 #include <Arduino.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
@@ -36,17 +37,20 @@ void loop() {
   tft.setTextSize(3);
   tft.setCursor(20, 100);
   tft.println("RED");
+  Serial.println("RED");
   delay(2000);
 
   tft.fillScreen(TFT_GREEN);
   tft.setTextColor(TFT_BLACK, TFT_GREEN);
   tft.setCursor(20, 100);
   tft.println("GREEN");
+  Serial.println("GREEN");
   delay(2000);
 
   tft.fillScreen(TFT_BLUE);
   tft.setTextColor(TFT_WHITE, TFT_BLUE);
   tft.setCursor(20, 100);
   tft.println("BLUE");
+  Serial.println("BLUE");
   delay(2000);
 }
