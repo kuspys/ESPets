@@ -16,6 +16,7 @@ void setup() {
 
   // Init TFT (TFT_eSPI handles SPI.begin internally)
   tft.begin();
+
   tft.invertDisplay(1);
   tft.setRotation(0);
   tft.fillScreen(TFT_BLACK);
