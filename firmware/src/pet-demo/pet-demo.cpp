@@ -10,10 +10,14 @@
 // (no heartbeat from a peer), a board never sits stuck on the logo forever
 // — it just spawns its own pet locally and loops the regular demo solo.
 //
-// Flash one board with -D PET_OWNER=1 (env:pet-demo-a) so it starts
-// holding the pet; flash the other with env:pet-demo-b so it starts
-// showing the logo. Requires OTA channel-matching to be attempted first;
-// see setupWiFiAndEspNow(), copied from the proven pattern in ball-demo.cpp.
+// Both boards boot undecided (neither owns the pet yet) and negotiate: every
+// heartbeat carries the sender's current ownership flag, so a board that
+// hears "peer already has it" always defers — it never matters which board
+// woke up first. -D PET_OWNER=1 (env:pet-demo-a) only breaks a genuine tie
+// (both booted together, peer present, neither owns it yet); env:pet-demo-b
+// (PET_OWNER=0) just keeps waiting in that tie case. Requires OTA channel-
+// matching to be attempted first; see setupWiFiAndEspNow(), copied from the
+// proven pattern in ball-demo.cpp.
 //
 // Sprites use true-black (#000000) ink and standard RGB565 packing, and
 // every frame is composited into an off-screen TFT_eSprite buffer and
@@ -52,6 +56,9 @@ typedef struct __attribute__((packed)) {
     uint8_t senderMac[6]; // trust this over the driver's recv-callback mac_addr,
                           // which has been observed misreporting the sender
     uint8_t type;
+    uint8_t ownsPet; // sender's current ownership flag, so a booting board can
+                     // learn "peer already has it" and defer instead of
+                     // blindly claiming the pet based on its own build flag
 } PetPacket;
 
 static uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -67,6 +74,12 @@ static unsigned long lastHeartbeatSentAt = 0;
 static unsigned long lastPeerSeenAt = 0;
 static bool everHeardPeer = false;
 static bool paired = false;
+static bool peerOwnsPet = false; // most recent ownership flag heard from the peer
+
+// True while this board currently displays/owns the pet. Both variants boot
+// with this false — see the header comment on why ownership is negotiated,
+// never assumed from the PET_OWNER build flag alone.
+static bool ownsPet = false;
 
 static volatile bool incomingPending = false;
 static PetPacket incomingPacket;
@@ -131,6 +144,7 @@ static void sendPacket(PacketType type) {
     PetPacket packet;
     memcpy(packet.senderMac, ownMac, sizeof(ownMac));
     packet.type = (uint8_t)type;
+    packet.ownsPet = ownsPet ? 1 : 0;
     esp_now_send(broadcastAddress, (uint8_t *)&packet, sizeof(packet));
 }
 
@@ -155,8 +169,6 @@ static Effect effect = EFFECT_NONE;
 static unsigned long effectStartMs = 0;
 static const unsigned long EFFECT_DURATION_MS = 700;
 static const int SPARKLE_COUNT = 4;
-
-static bool ownsPet = false;
 
 static void drawHeart(int cx, int cy, int size) {
     int r = size / 2;
@@ -317,9 +329,10 @@ static void drainIncomingPackets(unsigned long now) {
     incomingPending = false;
 
     lastPeerSeenAt = now;
+    peerOwnsPet = (packet.ownsPet != 0);
     if (!everHeardPeer) {
         everHeardPeer = true;
-        Serial.println("Peer detected.");
+        Serial.printf("Peer detected (peer %s the pet).\n", peerOwnsPet ? "has" : "does not have");
     }
 
     if (packet.type == PKT_TRANSFER && !ownsPet && effect == EFFECT_NONE) {
@@ -340,6 +353,22 @@ static bool shouldFallbackSolo(unsigned long now) {
         return true; // was paired, lost the peer mid-wait
     }
     return (now - bootMs) > BOOT_GRACE_MS; // never heard a peer at all
+}
+
+#if defined(PET_OWNER) && PET_OWNER
+static const bool IS_PRIMARY = true;
+#else
+static const bool IS_PRIMARY = false;
+#endif
+
+// Only reached when paired but neither board owns the pet yet — a genuine
+// simultaneous-boot tie. The primary claims it after a short deliberate
+// delay (giving the non-primary time to receive this and, if it also
+// reached this branch, back off); the non-primary never self-claims here.
+static const unsigned long TIEBREAK_DELAY_MS = 1500;
+
+static bool shouldClaimTiebreak(unsigned long now) {
+    return IS_PRIMARY && (now - bootMs) > TIEBREAK_DELAY_MS;
 }
 
 void showBootSplash() {
@@ -381,13 +410,11 @@ void setup() {
         }
     }
 
-#if defined(PET_OWNER) && PET_OWNER
-    ownsPet = true;
-    Serial.println("Starting as pet owner.");
-#else
+    // Always boot undecided — see the header comment on why ownership is
+    // negotiated over ESP-NOW rather than assumed from PET_OWNER.
     ownsPet = false;
-    Serial.println("Starting without pet — showing logo, waiting for a peer.");
-#endif
+    Serial.printf("Booting undecided (%s) — listening for a peer.\n",
+                   IS_PRIMARY ? "tiebreak primary" : "tiebreak secondary");
     currentMode = MODE_IDLE;
     modeStartMs = millis();
 
@@ -434,8 +461,18 @@ void loop() {
         } else {
             drawIdleWithWipe(0.0f); // first frame of the just-triggered vanish
         }
-    } else if (paired) {
+    } else if (paired && peerOwnsPet) {
+        // Peer already has the pet — always defer, regardless of who booted
+        // first or which board is the tiebreak primary.
         drawWaitingLogo(now);
+    } else if (paired && shouldClaimTiebreak(now)) {
+        Serial.println("Tie-break: claiming the pet as primary.");
+        ownsPet = true;
+        currentMode = MODE_IDLE;
+        modeStartMs = now;
+        drawFace(now);
+    } else if (paired) {
+        drawWaitingLogo(now); // paired, undecided tie, not yet ours to claim
     } else if (shouldFallbackSolo(now)) {
         Serial.println("No peer reachable — spawning pet locally.");
         ownsPet = true;
