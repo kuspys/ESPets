@@ -7,6 +7,7 @@
 #include <Arduino.h>
 #include <esp_now.h>
 #include <WiFi.h>
+#include "../common/ota.h"
 
 // Structure to send data
 typedef struct struct_message {
@@ -50,9 +51,10 @@ void setup() {
   Serial.begin(115200);
   delay(2000); // Wait for Serial to settle
 
-  // Set device as a Wi-Fi Station
-  WiFi.mode(WIFI_STA);
-  
+  // Set device as a Wi-Fi Station, and bring up OTA if a network is in range
+  // (non-blocking — ESP-NOW below works the same whether or not this joins).
+  OtaSupport::begin();
+
   Serial.println("\n--- ESP-NOW PlatformIO Test ---");
   Serial.print("Local MAC Address: ");
   Serial.println(WiFi.macAddress());
@@ -81,6 +83,8 @@ void setup() {
 }
 
 void loop() {
+  OtaSupport::handle();
+
   // Update data packet
   packetCount++;
   snprintf(myData.msg, sizeof(myData.msg), "Pet-Ping from %s", WiFi.macAddress().c_str());

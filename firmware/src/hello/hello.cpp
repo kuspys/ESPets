@@ -1,21 +1,26 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
+#include "../common/ota.h"
 
 LiquidCrystal_I2C LCD = LiquidCrystal_I2C(0x27, 16, 2);
 
 void setup() {
   Serial.begin(115200);
   Serial.println("Hello Module: Starting...");
-  
+
+  OtaSupport::begin();
+
   pinMode(2, OUTPUT);
-  
+
   LCD.init();
   LCD.backlight();
   Serial.println("Hello Module: LCD Initialized");
 }
 
 void loop() {
+  OtaSupport::handle();
+
   Serial.println("Hello Module: Blinking...");
   
   // Internal LED Pulse

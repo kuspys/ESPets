@@ -4,6 +4,7 @@
 #include <Wire.h>
 
 #include "SensorQMI8658.hpp"
+#include "../common/ota.h"
 
 static constexpr int kI2cSda = 47;
 static constexpr int kI2cScl = 48;
@@ -17,6 +18,8 @@ void setup() {
   delay(500);
   Serial.println();
   Serial.println("IMU test (QMI8658, SDA=47 SCL=48)");
+
+  OtaSupport::begin();
 
   Wire.begin(kI2cSda, kI2cScl);
   if (!imu.begin(Wire, QMI8658_L_SLAVE_ADDRESS, kI2cSda, kI2cScl)) {
@@ -44,6 +47,8 @@ void setup() {
 }
 
 void loop() {
+  OtaSupport::handle();
+
   static uint32_t lastPrintMs = 0;
   constexpr uint32_t kPrintIntervalMs = 250;
 

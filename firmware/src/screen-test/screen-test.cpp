@@ -2,6 +2,7 @@
 #include <Arduino.h>
 #include <SPI.h>
 #include <TFT_eSPI.h>
+#include "../common/ota.h"
 
 TFT_eSPI tft = TFT_eSPI(240, 240);
 
@@ -10,6 +11,8 @@ TFT_eSPI tft = TFT_eSPI(240, 240);
 void setup() {
   Serial.begin(115200);
   Serial.println("Screen test starting...");
+
+  OtaSupport::begin();
 
   // Backlight on
   pinMode(LCD_BL, OUTPUT);
@@ -32,6 +35,7 @@ void setup() {
 }
 
 void loop() {
+  OtaSupport::handle();
   tft.fillScreen(TFT_RED);
   tft.setTextColor(TFT_WHITE, TFT_RED);
   tft.setTextSize(3);
@@ -40,6 +44,7 @@ void loop() {
   Serial.println("RED");
   delay(2000);
 
+  OtaSupport::handle();
   tft.fillScreen(TFT_GREEN);
   tft.setTextColor(TFT_BLACK, TFT_GREEN);
   tft.setCursor(20, 100);
@@ -47,6 +52,7 @@ void loop() {
   Serial.println("GREEN");
   delay(2000);
 
+  OtaSupport::handle();
   tft.fillScreen(TFT_BLUE);
   tft.setTextColor(TFT_WHITE, TFT_BLUE);
   tft.setCursor(20, 100);

@@ -12,6 +12,7 @@
 #include <esp_now.h>
 #include <esp_wifi.h>
 #include <WiFi.h>
+#include "../common/ota.h"
 
 #define LCD_BL 20
 static const int SCREEN_SIZE = 240;
@@ -103,16 +104,31 @@ static void OnDataSent(const uint8_t *mac, esp_now_send_status_t status) {
 }
 
 static void setupWiFiAndEspNow() {
-    WiFi.mode(WIFI_STA);
+    // Try OTA first — if it joins a real AP, both boards land on that AP's
+    // channel and stay consistent with each other automatically. Only fall
+    // back to forcing a fixed channel if there's no network in range.
+    bool otaConnected = OtaSupport::begin();
     WiFi.macAddress(ownMac);
     Serial.print("Local MAC Address: ");
     Serial.println(WiFi.macAddress());
 
-    esp_wifi_set_promiscuous(true);
-    esp_err_t chResult = esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
-    esp_wifi_set_promiscuous(false);
-    Serial.printf("esp_wifi_set_channel(%d) via promiscuous mode returned %d (%s)\n",
-                   ESPNOW_CHANNEL, chResult, esp_err_to_name(chResult));
+    uint8_t peerChannel = 0; // 0 = use whatever channel WiFi ended up on
+    if (!otaConnected) {
+        // ESP32 remembers the last WiFi channel it associated with (NVS)
+        // even across reboots into firmware that never calls WiFi.begin() —
+        // one board having previously joined an AP is enough to desync it
+        // from a board that never associated with anything. With no AP in
+        // range for either board right now, force both onto the same fixed
+        // channel via promiscuous mode, which (unlike a plain
+        // esp_wifi_set_channel call) works even before the STA interface is
+        // fully initialized.
+        esp_wifi_set_promiscuous(true);
+        esp_err_t chResult = esp_wifi_set_channel(ESPNOW_CHANNEL, WIFI_SECOND_CHAN_NONE);
+        esp_wifi_set_promiscuous(false);
+        Serial.printf("No WiFi — forced ESP-NOW channel %d (%s)\n",
+                       ESPNOW_CHANNEL, esp_err_to_name(chResult));
+        peerChannel = ESPNOW_CHANNEL;
+    }
 
     if (esp_now_init() != ESP_OK) {
         Serial.println("Error initializing ESP-NOW");
@@ -124,7 +140,7 @@ static void setupWiFiAndEspNow() {
 
     esp_now_peer_info_t peerInfo = {};
     memcpy(peerInfo.peer_addr, broadcastAddress, 6);
-    peerInfo.channel = ESPNOW_CHANNEL;
+    peerInfo.channel = peerChannel;
     peerInfo.encrypt = false;
     if (esp_now_add_peer(&peerInfo) != ESP_OK) {
         Serial.println("Failed to add ESP-NOW peer");
@@ -217,6 +233,7 @@ static void renderBall() {
 }
 
 void loop() {
+    OtaSupport::handle();
     handleIncomingBall();
 
     unsigned long now = millis();
