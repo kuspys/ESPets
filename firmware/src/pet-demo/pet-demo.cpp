@@ -1,13 +1,20 @@
 // ESPets "pet:3" demo: a boot-time logo splash, then the cat mascot cycling
 // through four moods (idle/happy/sleeping/walking) with blinking, a gentle
 // bob/sway, and floating heart/"Z" overlays — pulled from the project's
-// Claude Design canvas ("Animated Cat Face.dc.html") and translated from a
-// live CSS/React animation into a small set of pre-rasterized sprite frames
-// plus cheap runtime motion (position offsets, not per-frame re-rendering).
+// Claude Design canvas ("Animated Cat Face.dc.html") and the pitch deck's
+// exact wordmark treatment (pet3-BP-Defense-Deck.dc.html title slide),
+// translated from live CSS/React animation into pre-rasterized sprite
+// frames plus cheap runtime motion (position offsets, not per-frame
+// re-rendering of the vector art).
 //
 // Sprites use true-black (#000000) ink and standard RGB565 packing — see
 // src/screen-test/screen-test.cpp for why (tft.setSwapBytes(true) is
 // required; a near-black gray like #1A1A1A tints pink/violet on this panel).
+//
+// Every frame is composited into an off-screen TFT_eSprite buffer and
+// pushed to the panel in one shot — drawing erase+redraw steps directly on
+// the live display caused visible tearing (a stray line) as the SPI bus
+// caught the panel mid-refresh.
 
 #include <Arduino.h>
 #include <SPI.h>
@@ -20,6 +27,7 @@
 #include "frame_logo.h"
 
 TFT_eSPI tft = TFT_eSPI(240, 240);
+TFT_eSprite frameBuf = TFT_eSprite(&tft);
 
 #define LCD_BL 20
 static const int SCREEN_SIZE = 240;
@@ -37,10 +45,6 @@ static unsigned long blinkUntil = 0;
 static const unsigned long BLINK_INTERVAL_MS = 3200;
 static const unsigned long BLINK_DURATION_MS = 180;
 
-static int prevDrawX = -1000, prevDrawY = -1000, prevDrawW = 0, prevDrawH = 0;
-
-// Small overlay animation state (hearts for HAPPY, "Z"s for SLEEP), drawn in
-// the narrow black margin above the sprite's bob range.
 static const int NUM_OVERLAY = 2;
 
 static void showLogo() {
@@ -50,16 +54,11 @@ static void showLogo() {
   tft.pushImage(x, y, LOGO_WIDTH, LOGO_HEIGHT, LOGO_SPRITE);
 }
 
-static void clearOverlayArea() {
-  // Top margin band, above the sprite's max bob range.
-  tft.fillRect(0, 0, SCREEN_SIZE, 24, TFT_BLACK);
-}
-
 static void drawHeart(int cx, int cy, int size) {
   int r = size / 2;
-  tft.fillCircle(cx - r / 2, cy, r / 2, HEART_PINK);
-  tft.fillCircle(cx + r / 2, cy, r / 2, HEART_PINK);
-  tft.fillTriangle(cx - r, cy, cx + r, cy, cx, cy + r, HEART_PINK);
+  frameBuf.fillCircle(cx - r / 2, cy, r / 2, HEART_PINK);
+  frameBuf.fillCircle(cx + r / 2, cy, r / 2, HEART_PINK);
+  frameBuf.fillTriangle(cx - r, cy, cx + r, cy, cx, cy + r, HEART_PINK);
 }
 
 static void drawOverlays(unsigned long now) {
@@ -71,14 +70,14 @@ static void drawOverlays(unsigned long now) {
       drawHeart(x, y, 8);
     }
   } else if (currentMode == MODE_SLEEP) {
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setTextSize(1);
+    frameBuf.setTextColor(TFT_WHITE, TFT_BLACK);
+    frameBuf.setTextSize(1);
     for (int i = 0; i < NUM_OVERLAY; i++) {
       float phase = fmod((now / 1600.0) + i * 0.5, 1.0);
       int y = 20 - (int)(phase * 16);
       int x = 170 + i * 12;
-      tft.setCursor(x, y);
-      tft.print("Z");
+      frameBuf.setCursor(x, y);
+      frameBuf.print("Z");
     }
   }
 }
@@ -87,8 +86,6 @@ static void advanceMode(unsigned long now) {
   if (now - modeStartMs >= MODE_DURATION_MS[currentMode]) {
     currentMode = (Mode)((currentMode + 1) % 4);
     modeStartMs = now;
-    tft.fillScreen(TFT_BLACK);
-    prevDrawW = 0; // force a full redraw of the new mode's sprite
   }
 }
 
@@ -139,19 +136,9 @@ static void drawFace(unsigned long now) {
     }
   }
 
-  int baseX = (SCREEN_SIZE - w) / 2;
-  int baseY = (SCREEN_SIZE - h) / 2;
-  int x = baseX + offsetX;
-  int y = baseY + offsetY;
-
-  if (prevDrawW > 0 && (prevDrawX != x || prevDrawY != y)) {
-    tft.fillRect(prevDrawX, prevDrawY, prevDrawW, prevDrawH, TFT_BLACK);
-  }
-  tft.pushImage(x, y, w, h, sprite);
-  prevDrawX = x;
-  prevDrawY = y;
-  prevDrawW = w;
-  prevDrawH = h;
+  int x = (SCREEN_SIZE - w) / 2 + offsetX;
+  int y = (SCREEN_SIZE - h) / 2 + offsetY;
+  frameBuf.pushImage(x, y, w, h, sprite);
 }
 
 void setup() {
@@ -173,7 +160,17 @@ void setup() {
   showLogo();
   delay(2500);
 
-  tft.fillScreen(TFT_BLACK);
+  // Full-screen 16-bit sprite buffer: 240*240*2 = 112.5KB, fits comfortably
+  // in PSRAM (8MB on this board). Composited off-screen, pushed atomically.
+  frameBuf.setColorDepth(16);
+  frameBuf.setSwapBytes(true);
+  if (frameBuf.createSprite(SCREEN_SIZE, SCREEN_SIZE) == nullptr) {
+    Serial.println("Failed to allocate frame buffer sprite — halting.");
+    while (true) {
+      delay(1000);
+    }
+  }
+
   modeStartMs = millis();
   Serial.println("Starting cat demo (idle -> happy -> sleep -> walk -> loop)");
 }
@@ -183,9 +180,11 @@ void loop() {
 
   unsigned long now = millis();
   advanceMode(now);
-  clearOverlayArea();
+
+  frameBuf.fillSprite(TFT_BLACK);
   drawOverlays(now);
   drawFace(now);
+  frameBuf.pushSprite(0, 0);
 
   delay(66); // ~15 FPS
 }
