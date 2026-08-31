@@ -3,10 +3,15 @@
 #include <SPI.h>
 #include <TFT_eSPI.h>
 #include "../common/ota.h"
+#include "pet_sprite.h"
 
 TFT_eSPI tft = TFT_eSPI(240, 240);
 
 #define LCD_BL 20
+
+// Center the sprite on the 240x240 panel.
+static const int PET_SPRITE_X = (240 - PET_SPRITE_WIDTH) / 2;
+static const int PET_SPRITE_Y = (240 - PET_SPRITE_HEIGHT) / 2;
 
 void setup() {
   Serial.begin(115200);
@@ -59,4 +64,10 @@ void loop() {
   tft.println("BLUE");
   Serial.println("BLUE");
   delay(2000);
+
+  OtaSupport::handle();
+  tft.fillScreen(TFT_BLACK);
+  tft.pushImage(PET_SPRITE_X, PET_SPRITE_Y, PET_SPRITE_WIDTH, PET_SPRITE_HEIGHT, PET_SPRITE);
+  Serial.println("PET");
+  delay(3000);
 }
