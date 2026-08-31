@@ -152,13 +152,17 @@ void setup() {
     delay(500);
     Serial.println("\n--- ESPets ESP-NOW Ball Demo ---");
 
+    // Keep the backlight off until the panel is initialized and blanked —
+    // GRAM holds uninitialized/random data right after power-up, which shows
+    // through as RGB noise if the backlight is already on during tft.begin().
     pinMode(LCD_BL, OUTPUT);
-    digitalWrite(LCD_BL, HIGH);
+    digitalWrite(LCD_BL, LOW);
 
     tft.begin();
     tft.invertDisplay(1);
     tft.setRotation(0);
     tft.fillScreen(TFT_BLACK);
+    digitalWrite(LCD_BL, HIGH);
 
     setupWiFiAndEspNow();
 

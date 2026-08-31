@@ -19,9 +19,11 @@ void setup() {
 
   OtaSupport::begin();
 
-  // Backlight on
+  // Keep the backlight off until the panel is initialized and blanked — GRAM
+  // holds uninitialized/random data right after power-up, which shows
+  // through as RGB noise if the backlight is already on during tft.begin().
   pinMode(LCD_BL, OUTPUT);
-  digitalWrite(LCD_BL, HIGH);
+  digitalWrite(LCD_BL, LOW);
 
   // Init TFT (TFT_eSPI handles SPI.begin internally)
   tft.begin();
@@ -35,6 +37,8 @@ void setup() {
   // go through a different internal path. Confirmed via on-device calibration.
   tft.setSwapBytes(true);
   tft.fillScreen(TFT_BLACK);
+
+  digitalWrite(LCD_BL, HIGH);
 
   Serial.println("TFT initialized.");
 
