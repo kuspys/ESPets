@@ -28,6 +28,12 @@ void setup() {
 
   tft.invertDisplay(1);
   tft.setRotation(0);
+  // pushImage() sends our raw uint16_t array's bytes in native (little-endian)
+  // order by default, but the panel wants MSB-first per pixel — without this,
+  // custom sprites come out with scrambled/wrong colors even though
+  // fillScreen()'s built-in named colors (TFT_RED etc.) look fine, since those
+  // go through a different internal path. Confirmed via on-device calibration.
+  tft.setSwapBytes(true);
   tft.fillScreen(TFT_BLACK);
 
   Serial.println("TFT initialized.");
