@@ -355,7 +355,6 @@ void setup() {
     delay(300);
     Serial.println("\n--- pet:3 Demo (ESP-NOW paired) ---");
 
-    bootMs = millis();
     setupWiFiAndEspNow();
 
     // Keep the backlight off until the panel is initialized and blanked —
@@ -391,6 +390,13 @@ void setup() {
 #endif
     currentMode = MODE_IDLE;
     modeStartMs = millis();
+
+    // Start the boot-grace clock only now, right before the main loop takes
+    // over — WiFi connect (up to OTA's own ~10s timeout) and the splash
+    // delay above can easily eat the whole grace window on their own,
+    // which previously caused a fallback-solo pet to spawn before the board
+    // had a real chance to listen for a peer's heartbeat.
+    bootMs = millis();
 }
 
 void loop() {
