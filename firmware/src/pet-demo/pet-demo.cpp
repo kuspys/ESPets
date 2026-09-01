@@ -81,6 +81,15 @@ static bool peerOwnsPet = false; // most recent ownership flag heard from the pe
 // never assumed from the PET_OWNER build flag alone.
 static bool ownsPet = false;
 
+// Guards the tiebreak claim (see shouldClaimTiebreak) to fire at most once
+// per boot. Without this, "(now - bootMs) > TIEBREAK_DELAY_MS" stays
+// permanently true for the rest of the session (bootMs never changes), so
+// ANY later moment where the primary is briefly !ownsPet with stale
+// peerOwnsPet info — normally just a one-tick gap right after handing off
+// the pet — looked identical to a genuine first-boot tie and re-claimed the
+// pet it had just given away.
+static bool everResolved = false;
+
 static volatile bool incomingPending = false;
 static PetPacket incomingPacket;
 
@@ -330,6 +339,10 @@ static void drainIncomingPackets(unsigned long now) {
 
     lastPeerSeenAt = now;
     peerOwnsPet = (packet.ownsPet != 0);
+    if (peerOwnsPet) {
+        everResolved = true; // confirmed real info the peer owns it — no
+                              // longer a genuine unresolved tie either way
+    }
     if (!everHeardPeer) {
         everHeardPeer = true;
         Serial.printf("Peer detected (peer %s the pet).\n", peerOwnsPet ? "has" : "does not have");
@@ -338,6 +351,7 @@ static void drainIncomingPackets(unsigned long now) {
     if (packet.type == PKT_TRANSFER && !ownsPet && effect == EFFECT_NONE) {
         Serial.println("Pet arriving from peer!");
         ownsPet = true;
+        everResolved = true;
         effect = EFFECT_APPEARING;
         effectStartMs = now;
     }
@@ -368,6 +382,9 @@ static const bool IS_PRIMARY = false;
 static const unsigned long TIEBREAK_DELAY_MS = 1500;
 
 static bool shouldClaimTiebreak(unsigned long now) {
+    if (everResolved) {
+        return false;
+    }
     return IS_PRIMARY && (now - bootMs) > TIEBREAK_DELAY_MS;
 }
 
@@ -442,6 +459,15 @@ void loop() {
         if (p >= 1.0f) {
             sendPacket(PKT_TRANSFER);
             ownsPet = false;
+            // We know for a fact the peer now owns it — don't wait for its
+            // next heartbeat to confirm. Without this, there's a window
+            // right after handoff where our own peerOwnsPet is still stale
+            // (false, from before the transfer), which used to fall through
+            // to the tiebreak branch below and re-claim the pet we just gave
+            // away, while the peer was *also* correctly claiming it from the
+            // real transfer packet — two cats at once.
+            peerOwnsPet = true;
+            everResolved = true;
             effect = EFFECT_NONE;
             Serial.println("Sent pet to peer.");
         }
@@ -468,6 +494,7 @@ void loop() {
     } else if (paired && shouldClaimTiebreak(now)) {
         Serial.println("Tie-break: claiming the pet as primary.");
         ownsPet = true;
+        everResolved = true;
         currentMode = MODE_IDLE;
         modeStartMs = now;
         drawFace(now);
@@ -476,6 +503,7 @@ void loop() {
     } else if (shouldFallbackSolo(now)) {
         Serial.println("No peer reachable — spawning pet locally.");
         ownsPet = true;
+        everResolved = true;
         currentMode = MODE_IDLE;
         modeStartMs = now;
         drawFace(now);
