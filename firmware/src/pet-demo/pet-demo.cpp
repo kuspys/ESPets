@@ -90,6 +90,17 @@ static bool ownsPet = false;
 // pet it had just given away.
 static bool everResolved = false;
 
+// ESP-NOW broadcast has no delivery guarantee or ack — a lost TRANSFER
+// packet must not strand the pet with nobody owning it forever. While a
+// handoff is pending, resend periodically; if the peer never confirms
+// (a heartbeat reporting ownsPet=1) within HANDOFF_TIMEOUT_MS, take the pet
+// back rather than leaving both boards parked on the logo indefinitely.
+static bool handoffPending = false;
+static unsigned long handoffSentAt = 0;
+static unsigned long lastHandoffResendAt = 0;
+static const unsigned long HANDOFF_RESEND_INTERVAL_MS = 300;
+static const unsigned long HANDOFF_TIMEOUT_MS = 3000;
+
 static volatile bool incomingPending = false;
 static PetPacket incomingPacket;
 
@@ -342,6 +353,10 @@ static void drainIncomingPackets(unsigned long now) {
     if (peerOwnsPet) {
         everResolved = true; // confirmed real info the peer owns it — no
                               // longer a genuine unresolved tie either way
+        if (handoffPending) {
+            Serial.println("Handoff confirmed by peer.");
+            handoffPending = false;
+        }
     }
     if (!everHeardPeer) {
         everHeardPeer = true;
@@ -354,6 +369,29 @@ static void drainIncomingPackets(unsigned long now) {
         everResolved = true;
         effect = EFFECT_APPEARING;
         effectStartMs = now;
+    }
+}
+
+// Resends the TRANSFER packet periodically while unconfirmed, and — if the
+// peer never confirms within HANDOFF_TIMEOUT_MS — reclaims the pet locally
+// rather than leaving it stranded with neither board owning it (which
+// happens if the one-shot TRANSFER packet is simply lost, since ESP-NOW
+// broadcast has no delivery guarantee or ack).
+static void updateHandoffPending(unsigned long now) {
+    if (!handoffPending) {
+        return;
+    }
+    if (now - handoffSentAt > HANDOFF_TIMEOUT_MS) {
+        Serial.println("Handoff never confirmed — reclaiming the pet.");
+        handoffPending = false;
+        ownsPet = true;
+        currentMode = MODE_IDLE;
+        modeStartMs = now;
+        return;
+    }
+    if (now - lastHandoffResendAt > HANDOFF_RESEND_INTERVAL_MS) {
+        lastHandoffResendAt = now;
+        sendPacket(PKT_TRANSFER);
     }
 }
 
@@ -450,6 +488,7 @@ void loop() {
     drainIncomingPackets(now);
     maybeSendHeartbeat(now);
     updatePairingState(now);
+    updateHandoffPending(now);
 
     frameBuf.fillSprite(TFT_BLACK);
 
@@ -459,17 +498,12 @@ void loop() {
         if (p >= 1.0f) {
             sendPacket(PKT_TRANSFER);
             ownsPet = false;
-            // We know for a fact the peer now owns it — don't wait for its
-            // next heartbeat to confirm. Without this, there's a window
-            // right after handoff where our own peerOwnsPet is still stale
-            // (false, from before the transfer), which used to fall through
-            // to the tiebreak branch below and re-claim the pet we just gave
-            // away, while the peer was *also* correctly claiming it from the
-            // real transfer packet — two cats at once.
-            peerOwnsPet = true;
             everResolved = true;
+            handoffPending = true;
+            handoffSentAt = now;
+            lastHandoffResendAt = now;
             effect = EFFECT_NONE;
-            Serial.println("Sent pet to peer.");
+            Serial.println("Sent pet to peer, awaiting confirmation.");
         }
     } else if (effect == EFFECT_APPEARING) {
         float p = min(1.0f, (now - effectStartMs) / (float)EFFECT_DURATION_MS);
@@ -504,6 +538,7 @@ void loop() {
         Serial.println("No peer reachable — spawning pet locally.");
         ownsPet = true;
         everResolved = true;
+        handoffPending = false; // don't keep resending a transfer to a peer that's gone
         currentMode = MODE_IDLE;
         modeStartMs = now;
         drawFace(now);
