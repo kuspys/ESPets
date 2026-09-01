@@ -218,24 +218,20 @@ static void drawOverlays(unsigned long now) {
     }
 }
 
-// Advances the mood cycle. On wrapping WALK -> IDLE (one full lap), attempts
-// a handoff if a peer is currently reachable; otherwise just keeps looping.
+// Advances the mood cycle. After EVERY single mood animation (not just a
+// full idle->happy->sleep->walk lap), attempts a handoff if a peer is
+// currently reachable; otherwise just keeps cycling moods solo.
 static void tickModeCycle(unsigned long now) {
     if (now - modeStartMs < MODE_DURATION_MS[currentMode]) {
         return;
     }
-    if (currentMode == MODE_WALK) {
-        if (paired) {
-            effect = EFFECT_DISAPPEARING;
-            effectStartMs = now;
-            Serial.println("Full lap complete, peer present -> vanishing.");
-            return; // freeze at idle pose; wipe effect takes over rendering
-        }
-        currentMode = MODE_IDLE;
-        modeStartMs = now;
-        return;
+    if (paired) {
+        effect = EFFECT_DISAPPEARING;
+        effectStartMs = now;
+        Serial.println("Animation complete, peer present -> vanishing.");
+        return; // freeze at idle pose; wipe effect takes over rendering
     }
-    currentMode = (Mode)(currentMode + 1);
+    currentMode = (currentMode == MODE_WALK) ? MODE_IDLE : (Mode)(currentMode + 1);
     modeStartMs = now;
 }
 
