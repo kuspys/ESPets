@@ -59,6 +59,10 @@ typedef struct __attribute__((packed)) {
     uint8_t ownsPet; // sender's current ownership flag, so a booting board can
                      // learn "peer already has it" and defer instead of
                      // blindly claiming the pet based on its own build flag
+    uint8_t nextMode; // TRANSFER only: which mood the receiver should start
+                      // in, so the idle/happy/sleep/walk cycle keeps
+                      // advancing across boards instead of resetting to
+                      // idle on every single handoff
 } PetPacket;
 
 static uint8_t broadcastAddress[] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
@@ -100,6 +104,15 @@ static unsigned long handoffSentAt = 0;
 static unsigned long lastHandoffResendAt = 0;
 static const unsigned long HANDOFF_RESEND_INTERVAL_MS = 300;
 static const unsigned long HANDOFF_TIMEOUT_MS = 3000;
+static uint8_t pendingNextMode = 0; // resent alongside every retry, so the
+                                    // peer always gets the same mood to
+                                    // start in regardless of which attempt
+                                    // actually gets through
+
+// Set from a received TRANSFER packet; applied once the local APPEARING
+// wipe finishes, so the mood cycle keeps advancing across boards instead of
+// resetting to idle on every single handoff.
+static uint8_t pendingArrivalMode = 0;
 
 static volatile bool incomingPending = false;
 static PetPacket incomingPacket;
@@ -160,11 +173,14 @@ static void setupWiFiAndEspNow() {
     }
 }
 
-static void sendPacket(PacketType type) {
+// nextMode is only meaningful for PKT_TRANSFER (which mood the receiver
+// should start in); heartbeats just send 0, which the receiver ignores.
+static void sendPacket(PacketType type, uint8_t nextMode = 0) {
     PetPacket packet;
     memcpy(packet.senderMac, ownMac, sizeof(ownMac));
     packet.type = (uint8_t)type;
     packet.ownsPet = ownsPet ? 1 : 0;
+    packet.nextMode = nextMode;
     esp_now_send(broadcastAddress, (uint8_t *)&packet, sizeof(packet));
 }
 
@@ -363,6 +379,7 @@ static void drainIncomingPackets(unsigned long now) {
         Serial.println("Pet arriving from peer!");
         ownsPet = true;
         everResolved = true;
+        pendingArrivalMode = packet.nextMode;
         effect = EFFECT_APPEARING;
         effectStartMs = now;
     }
@@ -387,7 +404,7 @@ static void updateHandoffPending(unsigned long now) {
     }
     if (now - lastHandoffResendAt > HANDOFF_RESEND_INTERVAL_MS) {
         lastHandoffResendAt = now;
-        sendPacket(PKT_TRANSFER);
+        sendPacket(PKT_TRANSFER, pendingNextMode);
     }
 }
 
@@ -492,7 +509,11 @@ void loop() {
         float p = min(1.0f, (now - effectStartMs) / (float)EFFECT_DURATION_MS);
         drawIdleWithWipe(p);
         if (p >= 1.0f) {
-            sendPacket(PKT_TRANSFER);
+            // Hand off whichever mood comes next in the cycle — not always
+            // idle — so idle/happy/sleep/walk keep advancing across boards
+            // instead of resetting on every single handoff.
+            pendingNextMode = (uint8_t)((currentMode + 1) % 4);
+            sendPacket(PKT_TRANSFER, pendingNextMode);
             ownsPet = false;
             everResolved = true;
             handoffPending = true;
@@ -506,7 +527,7 @@ void loop() {
         drawIdleWithWipe(1.0f - p);
         if (p >= 1.0f) {
             effect = EFFECT_NONE;
-            currentMode = MODE_IDLE;
+            currentMode = (Mode)(pendingArrivalMode % 4);
             modeStartMs = now;
         }
     } else if (ownsPet) {
